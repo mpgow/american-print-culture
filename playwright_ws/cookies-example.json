@@ -1,0 +1,20 @@
+[
+    {
+        "name": "cf_clearance",
+        "value": "***INSERT CF_CLEARANCE COOKIES FROM NORMAL CHROME TAB HERE. Locate via Chrome Dev Tools > Cookies > cf_clearance value",
+        "domain": ".hoover.org",
+        "path": "/",
+        "httpOnly": true,
+        "secure": true,
+        "sameSite": "None"
+    },
+    {
+        "name": "VeridianSessionID",
+        "value": "",
+        "domain": "hojishinbun.hoover.org",
+        "path": "/",
+        "httpOnly": true,
+        "secure": true,
+        "sameSite": "Lax"
+    }
+]

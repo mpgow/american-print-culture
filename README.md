@@ -74,6 +74,8 @@ This will search through 5 pages starting from the provided URL, look for occurr
 
 - If the script encounters a login-required page, it will skip that page and move to the next one.
 - If there are network or DNS issues, the script will retry the action up to 3 times by default.
+- If Cloudflare is active on the Hoji Shinbun website, inject your own verified cookies from a normal chrome tab (cf_clearance) into a "cookies.json" inside the playwright_ws folder.
+- An example cookies file is provided, "cookies-example.json"
 
 ## License
 
