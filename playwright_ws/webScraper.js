@@ -1,4 +1,18 @@
+// import { chromium } from "playwright";
+
+// import { chromium as playwrightChromium } from "playwright";
+// import { chromium } from "playwright-extra";
+// import StealthPlugin from "puppeteer-extra-plugin-stealth";
+// chromium.use(StealthPlugin());
+
+// import { chromium } from "patchright";
+
+// import { firefox } from "playwright";
+
+// ^ attempts to bypass cloudflare by installing playwright stealth, and launching a firefox window instead (failures)
+
 import { chromium } from "playwright";
+import path from "path"; // used for Chrome to resolve relative path in context launch
 import fs from "fs";
 import readline from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
@@ -35,10 +49,33 @@ async function safeGoto(page, url, opts = {}) {
       await page.waitForLoadState("networkidle");
 
       // if we got a bad HTTP status or landed restricted access page, bail out.
-      if (
-        (response && response.status() >= 400) ||
-        (expectArticle && (await isLoginPage(page)))
-      ) {
+      
+      // if (
+      //   (response && response.status() >= 400) ||
+      //   (expectArticle && (await isLoginPage(page)))
+      // ) {
+      //   throw new Error("login-required");
+      // }
+
+      // If we detect a cloudflare page, attempt to bypass verification manually
+      // Currently, CF's detection still blocks this, so rely on manual cookie verification string approach
+      const title = await page.title();
+      if (title.includes("Just a moment")) { // detects cloudflare's default title
+        console.log("\nCloudflare human verification check, please solve manually\nDid you input your cloudflare cookies from a normal chrome tab? (You can find it via dev tools -> cookies -> cf_clearance; paste into cookies.json");
+        await page.waitForFunction(
+          () => !document.title.includes("Just a moment"),
+          {timeout : 60_000}
+        );
+        console.log("\nVerification complete")
+        await page.waitForLoadState("networkidle");
+      }
+      if (response && response.status() >= 400) {
+        throw new Error(`bad-status-${response.status()}`);
+      }
+      // if (await isLoginPage(page)) {
+      //   throw new Error("login-required");
+      // }
+      if (expectArticle && (await isLoginPage(page))) {
         throw new Error("login-required");
       }
       return;
@@ -67,37 +104,53 @@ async function safeGoto(page, url, opts = {}) {
 async function findData(browser, links, storage = [], targetString) {
   for (const [index, link] of links.entries()) {
     const page = await browser.newPage();
+    // const page = await context.newPage(); // context gets passed in as "browser"
     try {
       console.log(`\n[${index + 1}/${links.length}] Navigating to: ${link}`);
       await safeGoto(page, link, { expectArticle: true }); // throws if login required
 
-      await page.waitForSelector(
+      await page.waitForSelector( // technically should not be an issue anymore, since OCR in #oseadinitialviewerdata is a static element that's always in the HTML
         "#documentdisplayleftpane #documentdisplayleftpanecontent",
         { timeout: 60_000 } // 60 second timeout
       );
 
       // collect URL that contains the publication date
       const linkWithDate = await page
-        .locator("#eastview-share-wrapper input")
+        // .locator("#eastview-share-wrapper input")
+        .locator("#eastview-persistent-url") // new permalink selector in page
         .getAttribute("value");
 
-      // article paragraphs
-      const paragraphs = await page
-        .locator(
-          "#documentdisplayleftpane #documentdisplayleftpanesectiontextcontainer p"
-        )
-        .allTextContents();
-      const mergedParagraphs = paragraphs.join(" ");
+      // // article paragraphs // OLD: timing out waiting for ajax, wanted user to open up the OCR text -> fetch instead
+      // const paragraphs = await page
+      //   .locator(
+      //     "#documentdisplayleftpane #documentdisplayleftpanesectiontextcontainer p"
+      //   )
+      //   .allTextContents();
+      // const mergedParagraphs = paragraphs.join(" ");
+
+      // get OCR text from embedded JSON (no AJAX wait needed)
+      const dataEl = page.locator("#oseadinitialviewerdata");
+      const rawJson = await dataEl.getAttribute("data-initial-display-page-json");
+      const parsed = JSON.parse(rawJson);
+
+      let mergedParagraphs = "";
+      for (const [key, val] of Object.entries(parsed)) {
+        if (key.startsWith("pageLineAreas/")) {
+          const lines = JSON.parse(val);
+          mergedParagraphs += lines.map(l => l.t).join(" ");
+        }
+      }
 
       // count occurrences of the search term
       function escapeRegExp(string) {
         return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       }
       const re = new RegExp(escapeRegExp(targetString), "g");
-      const numWords = paragraphs.reduce(
-        (sum, p) => sum + (p.match(re)?.length || 0),
-        0
-      );
+      // const numWords = paragraphs.reduce(
+      //   (sum, p) => sum + (p.match(re)?.length || 0),
+      //   0
+      // );
+      const numWords = (mergedParagraphs.match(re)?.length || 0); // mergedParagraphs is now a string (not array), so use regex directly
 
       storage.push({
         link,
@@ -163,7 +216,8 @@ async function findSingleData(page, link, storage = []) {
  */
 async function findLinks(page, linkStorage = []) {
   try {
-    const searchSources = page.locator(".fullwidthwrapper .searchresults");
+    // const searchSources = page.locator(".fullwidthwrapper .searchresults");
+    const searchSources = page.locator("ol.searchresults"); // 
     const countSource = await searchSources.locator("li").count();
     console.log(`Total number of sources on this page: ${countSource}`);
 
@@ -195,6 +249,7 @@ async function autoSearch(browser, startPage, amount = Infinity) {
 
   for (let i = 0; i < amount; i++) {
     const page = await browser.newPage();
+    // const page = await context.newPage(); // context gets passed in as "browser"
     try {
       await safeGoto(page, currentPage);
 
@@ -202,8 +257,11 @@ async function autoSearch(browser, startPage, amount = Infinity) {
       results.push(...(await findLinks(page, [])));
 
       // locate the all available links to navigate to
-      const navLinks = page.locator(
-        ".fullwidthwrapper #searchpagesearchresults nav .page-item a"
+      // const navLinks = page.locator(
+      //   ".fullwidthwrapper #searchpagesearchresults nav .page-item a"
+      // );
+      const navLinks = page.locator( // refit Hoji Shinbun HTML
+        "#searchpagesearchresults nav .page-item a"
       );
       const count = await navLinks.count();
       console.log(`Available navigation links: ${count}`);
@@ -246,7 +304,46 @@ async function autoSearch(browser, startPage, amount = Infinity) {
  * edit things here
  */
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  // const browser = await chromium.launch({ headless: true });
+  
+  // const browser = await chromium.launch({ headless: false });
+  // const context = await browser.newContext({
+  //   userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  // });
+
+  // const context = await chromium.launchPersistentContext("./browser-data", {
+  //   headless: false,
+  //   userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  // });
+
+  // const context = await chromium.launchPersistentContext("./browser-data", {
+  //   headless: false,
+  //   channel: "chrome",
+  //   userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  // });
+
+  // const context = await firefox.launchPersistentContext("./browser-data-ff", {
+  //   headless: false,
+  // });
+
+  // const context = await chromium.launchPersistentContext("./browser-data-chrome", {
+  //   headless: false,
+  //   channel: "chrome",
+  //   ignoreDefaultArgs: ["--enable-automation"],
+  // });
+
+  // 
+  // const context = await chromium.launchPersistentContext("C:/Users/Mpgow/AppData/Local/Playwright/chrome-profile", {
+    
+  const context = await chromium.launchPersistentContext(path.resolve("./browser-data-chrome"), {
+    headless: false,
+    channel: "chrome",
+    ignoreDefaultArgs: ["--enable-automation"],
+  });
+
+  const cookiesRaw = fs.readFileSync("./cookies.json", "utf8");
+  const cookies = JSON.parse(cookiesRaw);
+  await context.addCookies(cookies);
 
   // user input for word and and file name
   const rl = readline.createInterface({ input, output });
@@ -267,7 +364,8 @@ async function autoSearch(browser, startPage, amount = Infinity) {
   // Making sure its a number
   if (isNaN(pages) || pages <= 0) {
     console.error("Invalid number of pages. Please enter a positive integer.");
-    await browser.close();
+    // await browser.close();
+    await context.close();
     return;
   }
 
@@ -275,14 +373,18 @@ async function autoSearch(browser, startPage, amount = Infinity) {
   // automatically search through more availalbe pages starting with the START_URL to the amount of pages you want
   // change the amount of pages to search by changing the number in the autosSearch parameter
   // NOTE: it means 500 PAGES not 500 LINKS
-  const links = await autoSearch(browser, START_URL, pages);
+
+  // const links = await autoSearch(browser, START_URL, pages);
+  const links = await autoSearch(context, START_URL, pages);
   if (!links.length) {
     console.error("No links returned from autoSearch. Exiting.");
-    await browser.close();
+    // await browser.close();
+    await context.close();
     return;
   }
 
-  const data = await findData(browser, links, [], word);
+  // const data = await findData(browser, links, [], word);
+  const data = await findData(context, links, [], word);
 
   // file name validation
   const isValidFileName = /^[^<>:"/\\|?*\x00-\x1F]+$/.test(fileName) && fileName.trim() !== "";
@@ -293,5 +395,6 @@ async function autoSearch(browser, startPage, amount = Infinity) {
   fs.writeFileSync(jsonName, JSON.stringify(data, null, 2), "utf8");
   console.log(`JSON file ${jsonName} created successfully!`);
 
-  await browser.close();
+  // await browser.close();
+  await context.close();
 })();

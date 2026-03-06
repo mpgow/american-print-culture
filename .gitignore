@@ -1,2 +1,14 @@
 # Ignore specific files inside playwright_ws
-playwright_ws/node_modules
+# dependencies
+playwright_ws/node_modules/
+
+# browser profiles (leftovers from attempts to bypass Cloudflare, will delete in next version)
+playwright_ws/browser-data/
+playwright_ws/browser-data-chrome/
+playwright_ws/browser-data-ff/
+
+# sensitive / credentials (you may want to upload your normal chrome cookies to bypass Cloudflare)
+playwright_ws/cookies.json
+
+# scraped output
+playwright_ws/output-*.json
